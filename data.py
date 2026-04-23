@@ -77,6 +77,22 @@ def _stream_fineweb(name: str, config: str) -> Iterator[str]:
             yield text
 
 
+# Module-level so multiprocessing can pickle it.
+# Lazily initialize tiktoken in each worker (creating it at import time would
+# pickle the encoder per-task, which is slow).
+_WORKER_ENC = None
+
+
+def _encode_doc(text: str) -> np.ndarray:
+    global _WORKER_ENC
+    if _WORKER_ENC is None:
+        import tiktoken
+        _WORKER_ENC = tiktoken.get_encoding("gpt2")
+    ids = _WORKER_ENC.encode_ordinary(text)
+    ids.append(_WORKER_ENC.eot_token)
+    return np.asarray(ids, dtype=np.uint16)
+
+
 def prepare_fineweb_edu(
     data_dir: str = "data",
     target_train_tokens: int = 1_200_000_000,
@@ -114,15 +130,6 @@ def prepare_fineweb_edu(
     if num_proc is None:
         num_proc = max(1, (os.cpu_count() or 2) - 1)
 
-    import tiktoken
-    enc = tiktoken.get_encoding("gpt2")
-    eot = enc.eot_token
-
-    def encode(text: str) -> np.ndarray:
-        ids = enc.encode_ordinary(text)
-        ids.append(eot)
-        return np.asarray(ids, dtype=np.uint16)
-
     docs = _stream_fineweb(FINEWEB_EDU_NAME, FINEWEB_EDU_CONFIG)
 
     val_needed = max(0, target_val_tokens - have_val)
@@ -130,18 +137,18 @@ def prepare_fineweb_edu(
 
     if val_needed > 0:
         print(f"[data] writing {val_needed:,} val tokens → {val_path}")
-        _write_until(val_path, val_needed, docs, encode, num_proc)
+        _write_until(val_path, val_needed, docs, num_proc)
 
     if train_needed > 0:
         print(f"[data] writing {train_needed:,} train tokens → {train_path}")
-        _write_until(train_path, train_needed, docs, encode, num_proc)
+        _write_until(train_path, train_needed, docs, num_proc)
 
     done_marker.touch()
     print(f"[data] done: train={_bin_token_count(train_path):,} val={_bin_token_count(val_path):,}")
     return train_path, val_path
 
 
-def _write_until(path: Path, needed: int, docs: Iterator[str], encode, num_proc: int) -> None:
+def _write_until(path: Path, needed: int, docs: Iterator[str], num_proc: int) -> None:
     from multiprocessing import Pool
     written = 0
     chunk = 1024
@@ -152,20 +159,20 @@ def _write_until(path: Path, needed: int, docs: Iterator[str], encode, num_proc:
             for doc in docs:
                 buf.append(doc)
                 if len(buf) >= chunk:
-                    written += _flush(pool, buf, encode, f)
+                    written += _flush(pool, buf, f)
                     buf.clear()
                     if (written // chunk) % 10 == 0:
                         print(f"  [data] +{written:,} tokens")
                     if written >= needed:
                         break
             if buf and written < needed:
-                written += _flush(pool, buf, encode, f)
+                written += _flush(pool, buf, f)
     finally:
         f.close()
 
 
-def _flush(pool, buf: list[str], encode, f) -> int:
-    arrs = pool.map(encode, buf)
+def _flush(pool, buf: list[str], f) -> int:
+    arrs = pool.map(_encode_doc, buf)
     n = 0
     for a in arrs:
         f.write(a.tobytes())
