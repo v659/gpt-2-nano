@@ -1,0 +1,8 @@
+# JAX is installed differently on TPU vs GPU vs CPU — install it BEFORE these,
+# using the right wheel for your accelerator. See the notebook for the exact line.
+flax>=0.8
+optax>=0.2
+orbax-checkpoint>=0.5
+datasets>=2.16
+tiktoken>=0.5
+numpy>=1.24

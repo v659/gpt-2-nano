@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+.idea/
+.vscode/
+
+# training artifacts
+out/
+checkpoints/
+data/tinyshakespeare/*.bin
+data/tinyshakespeare/input.txt
+data/fineweb_edu/*.bin
+*.pt
+*.msgpack
